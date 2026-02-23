@@ -4,6 +4,10 @@ mod svm;
 mod system_program;
 mod transaction;
 
+use account::AccountSharedData;
+use accounts_db::AccountsDB;
+use system_program::SYSTEM_PROGRAM_ID;
+use transaction::{CompiledInstruction, Hash, Message, MessageHeader, Transaction};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 
@@ -152,6 +156,136 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 }
 
 // ---------------------------------------------------------------------------
+// SVM transfer demo
+//
+// Demonstrates the full pipeline for a SOL transfer without the Bank layer:
+//   AccountsDB  →  Transaction  →  SVM  →  SystemProgram  →  AccountsDB
+//
+// The Bank (signature verification, fee collection, blockhash check) is
+// intentionally skipped here — it will be added in the next session.
+// ---------------------------------------------------------------------------
+fn lamports_to_sol(lamports: u64) -> f64 {
+    lamports as f64 / 1_000_000_000.0
+}
+
+fn print_balances(label: &str, db: &AccountsDB, keys: &[account::Pubkey]) {
+    println!("  {}:", label);
+    for key in keys {
+        let lamports = db.load(key).map(|a| a.lamports()).unwrap_or(0);
+        println!("    {:?}  {:.9} SOL", key, lamports_to_sol(lamports));
+    }
+}
+
+fn demo_svm_transfer() {
+    println!("=== SVM Transfer Demo ===\n");
+
+    // --- Addresses ---
+    let alice  = account::Pubkey::from_byte(1);
+    let bob    = account::Pubkey::from_byte(2);
+    let system = SYSTEM_PROGRAM_ID;
+
+    // --- Set up AccountsDB ---
+    // Alice is pre-funded (simulates a genesis airdrop).
+    // Bob does not exist yet — his account will be created by the transfer.
+    let mut db = AccountsDB::new();
+    db.store(alice, AccountSharedData::new(5_000_000_000, 0, system));
+
+    println!("  Balances before:");
+    println!("    {:?}  {:.9} SOL  (funded)", alice, lamports_to_sol(5_000_000_000));
+    println!("    {:?}  {:.9} SOL  (does not exist yet)\n", bob, lamports_to_sol(0));
+
+    // --- Build the Transfer instruction data ---
+    // SystemProgram::Transfer data layout (12 bytes):
+    //   [0..4]  discriminator = 2  (u32 LE)
+    //   [4..12] lamports           (u64 LE)
+    let transfer_lamports: u64 = 1_000_000_000; // 1 SOL
+    let mut ix_data = Vec::with_capacity(12);
+    ix_data.extend_from_slice(&2u32.to_le_bytes());           // discriminator
+    ix_data.extend_from_slice(&transfer_lamports.to_le_bytes()); // amount
+
+    // --- Build the Transaction ---
+    //
+    // account_keys layout:
+    //   [0] alice  — writable signer  (fee payer + source)
+    //   [1] bob    — writable         (destination)
+    //   [2] system — readonly         (program being called)
+    //
+    // header encodes these three groups:
+    //   num_required_signatures:        1  (alice)
+    //   num_readonly_signed_accounts:   0  (alice is writable)
+    //   num_readonly_unsigned_accounts: 1  (system)
+    let header = MessageHeader {
+        num_required_signatures:        1,
+        num_readonly_signed_accounts:   0,
+        num_readonly_unsigned_accounts: 1,
+    };
+
+    let instruction = CompiledInstruction::new(
+        2,          // program_id_index → account_keys[2] = SystemProgram
+        vec![0, 1], // accounts         → [alice, bob]
+        ix_data,
+    );
+
+    let message = Message::new(
+        header,
+        vec![alice, bob, system],
+        Hash::default(), // blockhash — Bank would validate this; skipped here
+        vec![instruction],
+    );
+
+    // NOTE: signatures are empty — the Bank would verify them before calling
+    // the SVM. We call the SVM directly here to focus on execution.
+    let tx = Transaction::new(message, vec![]);
+
+    println!("  Transaction:");
+    println!("    program       : SystemProgram (11111...1)");
+    println!("    instruction   : Transfer");
+    println!("    from          : {:?}", alice);
+    println!("    to            : {:?}", bob);
+    println!("    amount        : {:.9} SOL", lamports_to_sol(transfer_lamports));
+    println!("    (Bank skipped — no signature verification or fee collection)\n");
+
+    // --- Execute via SVM ---
+    print!("  Executing via SVM ... ");
+    match svm::execute(&tx, &mut db) {
+        Ok(()) => println!("Ok\n"),
+        Err(e) => {
+            println!("FAILED: {:?}\n", e);
+            return;
+        }
+    }
+
+    // --- Print results ---
+    println!("  Balances after:");
+    println!("    {:?}  {:.9} SOL", alice, lamports_to_sol(db.load(&alice).unwrap().lamports()));
+    println!("    {:?}  {:.9} SOL\n", bob,   lamports_to_sol(db.load(&bob).unwrap().lamports()));
+
+    // --- Failure demo: try to overdraft Alice ---
+    println!("  Overdraft attempt (transfer 999 SOL Alice → Bob) ...");
+    let mut ix_data_overdraft = Vec::with_capacity(12);
+    ix_data_overdraft.extend_from_slice(&2u32.to_le_bytes());
+    ix_data_overdraft.extend_from_slice(&999_000_000_000u64.to_le_bytes());
+
+    let ix_overdraft = CompiledInstruction::new(2, vec![0, 1], ix_data_overdraft);
+    let msg_overdraft = Message::new(
+        MessageHeader { num_required_signatures: 1, num_readonly_signed_accounts: 0, num_readonly_unsigned_accounts: 1 },
+        vec![alice, bob, system],
+        Hash::default(),
+        vec![ix_overdraft],
+    );
+    let tx_overdraft = Transaction::new(msg_overdraft, vec![]);
+
+    match svm::execute(&tx_overdraft, &mut db) {
+        Ok(())  => println!("  Result: Ok  (unexpected!)"),
+        Err(e)  => println!("  Result: Err({:?})  ✓ rejected correctly\n", e),
+    }
+
+    println!("  Balances unchanged after failed tx:");
+    println!("    {:?}  {:.9} SOL", alice, lamports_to_sol(db.load(&alice).unwrap().lamports()));
+    println!("    {:?}  {:.9} SOL\n", bob,   lamports_to_sol(db.load(&bob).unwrap().lamports()));
+}
+
+// ---------------------------------------------------------------------------
 // Demo
 // ---------------------------------------------------------------------------
 fn main() {
@@ -216,4 +350,6 @@ fn main() {
         "Tampered chain valid: {}  (expected: false)\n",
         tampered_valid
     );
+
+    demo_svm_transfer();
 }

@@ -1,5 +1,6 @@
 mod account;
 mod accounts_db;
+mod svm;
 mod system_program;
 mod transaction;
 

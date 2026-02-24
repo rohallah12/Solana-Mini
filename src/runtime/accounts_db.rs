@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 use std::collections::HashMap;
-use crate::account::{AccountSharedData, Pubkey};
+use crate::types::account::{AccountSharedData, Pubkey};
 
 // ---------------------------------------------------------------------------
 // AccountsDB — the state store.

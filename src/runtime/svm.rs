@@ -17,10 +17,10 @@
 // Reference: https://github.com/anza-xyz/agave/tree/master/svm
 // ---------------------------------------------------------------------------
 
-use crate::account::AccountSharedData;
-use crate::accounts_db::AccountsDB;
-use crate::system_program::{self, SYSTEM_PROGRAM_ID};
-use crate::transaction::Transaction;
+use crate::types::account::AccountSharedData;
+use crate::runtime::accounts_db::AccountsDB;
+use crate::programs::system::{self, SYSTEM_PROGRAM_ID};
+use crate::types::transaction::Transaction;
 
 // ---------------------------------------------------------------------------
 // Error
@@ -38,7 +38,7 @@ pub enum SvmError {
     /// A SystemProgram instruction failed.
     SystemProgram {
         instruction: usize,
-        error: system_program::SystemProgramError,
+        error: system::SystemProgramError,
     },
 }
 
@@ -117,14 +117,14 @@ pub fn execute(tx: &Transaction, accounts_db: &mut AccountsDB) -> Result<(), Svm
 
         // Dispatch to the correct program.
         if program_id == &SYSTEM_PROGRAM_ID {
-            let decoded = system_program::decode(&instruction.data).map_err(|e| {
+            let decoded = system::decode(&instruction.data).map_err(|e| {
                 SvmError::SystemProgram {
                     instruction: ix_index,
                     error: e,
                 }
             })?;
 
-            system_program::process(&decoded, &mut ix_accounts).map_err(|e| {
+            system::process(&decoded, &mut ix_accounts).map_err(|e| {
                 SvmError::SystemProgram {
                     instruction: ix_index,
                     error: e,

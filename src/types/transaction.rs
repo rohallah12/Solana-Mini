@@ -11,7 +11,7 @@
 // Reference: https://github.com/anza-xyz/solana-sdk/blob/master/transaction/src/lib.rs
 // ---------------------------------------------------------------------------
 
-use crate::account::Pubkey;
+use crate::types::account::Pubkey;
 use std::fmt;
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@
 // Reference: https://github.com/anza-xyz/solana-sdk/blob/master/system-program/src/lib.rs
 // ---------------------------------------------------------------------------
 
-use crate::account::{AccountSharedData, Pubkey};
+use crate::types::account::{AccountSharedData, Pubkey};
 
 // The canonical address of the SystemProgram: all 32 bytes are zero.
 // On real Solana this displays as "11111111111111111111111111111111" in base58.

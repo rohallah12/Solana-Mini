@@ -1,13 +1,12 @@
-mod account;
-mod accounts_db;
-mod svm;
-mod system_program;
-mod transaction;
+mod types;
+mod runtime;
+mod programs;
 
-use account::AccountSharedData;
-use accounts_db::AccountsDB;
-use system_program::SYSTEM_PROGRAM_ID;
-use transaction::{CompiledInstruction, Hash, Message, MessageHeader, Transaction};
+use types::account::{AccountSharedData, Pubkey};
+use runtime::accounts_db::AccountsDB;
+use runtime::svm;
+use programs::system::SYSTEM_PROGRAM_ID;
+use types::transaction::{CompiledInstruction, Hash, Message, MessageHeader, Transaction};
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 
@@ -168,7 +167,7 @@ fn lamports_to_sol(lamports: u64) -> f64 {
     lamports as f64 / 1_000_000_000.0
 }
 
-fn print_balances(label: &str, db: &AccountsDB, keys: &[account::Pubkey]) {
+fn print_balances(label: &str, db: &AccountsDB, keys: &[Pubkey]) {
     println!("  {}:", label);
     for key in keys {
         let lamports = db.load(key).map(|a| a.lamports()).unwrap_or(0);
@@ -180,8 +179,8 @@ fn demo_svm_transfer() {
     println!("=== SVM Transfer Demo ===\n");
 
     // --- Addresses ---
-    let alice  = account::Pubkey::from_byte(1);
-    let bob    = account::Pubkey::from_byte(2);
+    let alice  = Pubkey::from_byte(1);
+    let bob    = Pubkey::from_byte(2);
     let system = SYSTEM_PROGRAM_ID;
 
     // --- Set up AccountsDB ---

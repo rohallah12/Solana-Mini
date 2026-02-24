@@ -36,8 +36,9 @@ use crate::types::transaction::{CompiledInstruction, Hash, Message, MessageHeade
 // Shared state passed into the server.
 // ---------------------------------------------------------------------------
 pub struct NodeState {
-    pub db:  Arc<Mutex<AccountsDB>>,
-    pub poh: Arc<Mutex<PohGenerator>>,
+    pub db:          Arc<Mutex<AccountsDB>>,
+    pub poh:         Arc<Mutex<PohGenerator>>,
+    pub log_entries: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ pub struct NodeState {
 // Spawns the PoH ticker on a background thread, then runs the HTTP server
 // on the current thread.
 // ---------------------------------------------------------------------------
-pub fn start() {
+pub fn start(log_entries: bool) {
     // --- Genesis: pre-fund a handful of accounts so you can transfer immediately ---
     let mut db = AccountsDB::new();
     for byte in 1..=5u8 {
@@ -56,25 +57,32 @@ pub fn start() {
     }
 
     let state = Arc::new(NodeState {
-        db:  Arc::new(Mutex::new(db)),
-        poh: Arc::new(Mutex::new(PohGenerator::new(b"solana-genesis", 100))),
+        db:          Arc::new(Mutex::new(db)),
+        poh:         Arc::new(Mutex::new(PohGenerator::new(b"solana-genesis", 100))),
+        log_entries,
     });
 
     // --- PoH ticker thread ---
     // Ticks continuously at hashes_per_tick=100.
     // Prints each tick entry so you can see the clock running.
-    let poh_ref = Arc::clone(&state.poh);
+    let poh_ref      = Arc::clone(&state.poh);
+    let log_entries_ = log_entries;
     std::thread::spawn(move || {
         loop {
             {
                 let mut poh = poh_ref.lock().unwrap();
                 poh.tick();
-                let entry = poh.entries.last().unwrap();
-                println!(
-                    "[poh] tick  hashes={:<6} hash={}",
-                    entry.num_hashes,
-                    hex::encode(&entry.hash[..8])
-                );
+                let idx   = poh.entries.len() - 1;
+                let entry = &poh.entries[idx];
+                if log_entries_ {
+                    print_entry(idx, entry);
+                } else {
+                    println!(
+                        "[poh] tick  hashes={:<6} hash={}",
+                        entry.num_hashes,
+                        hex::encode(&entry.hash[..8])
+                    );
+                }
             }
             // Sleep between ticks so the terminal stays readable.
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -192,13 +200,18 @@ fn handle_transfer(
         Ok(()) => {
             let mut poh = state.poh.lock().unwrap();
             poh.record(vec![tx]);
-            let entry = poh.entries.last().unwrap();
+            let idx   = poh.entries.len() - 1;
+            let entry = &poh.entries[idx];
             let hash_hex = hex::encode(entry.hash);
-            println!(
-                "[poh]  record hashes={:<6} hash={} txs=1",
-                entry.num_hashes,
-                hex::encode(&entry.hash[..8])
-            );
+            if state.log_entries {
+                print_entry(idx, entry);
+            } else {
+                println!(
+                    "[poh]  record hashes={:<6} hash={} txs=1",
+                    entry.num_hashes,
+                    hex::encode(&entry.hash[..8])
+                );
+            }
             hash_hex
         }
         Err(_) => String::new(),
@@ -214,6 +227,41 @@ fn handle_transfer(
             r#"{{"ok":false,"error":"{}"}}"#,
             e
         )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// print_entry — full entry dump, shown when --log-entries is passed.
+// ---------------------------------------------------------------------------
+fn print_entry(idx: usize, entry: &crate::runtime::poh::Entry) {
+    let kind = if entry.transactions.is_empty() { "TICK  " } else { "RECORD" };
+    println!(
+        "[entry #{:<4}] {}  hashes={:<6}  hash={}",
+        idx,
+        kind,
+        entry.num_hashes,
+        hex::encode(entry.hash),
+    );
+    for (ti, tx) in entry.transactions.iter().enumerate() {
+        println!("  tx[{}]:", ti);
+        println!("    account_keys ({}):", tx.message.account_keys.len());
+        for (i, key) in tx.message.account_keys.iter().enumerate() {
+            let writable = tx.message.is_writable(i);
+            let signer   = tx.message.is_signer(i);
+            println!(
+                "      [{}] {:?}  writable={}  signer={}",
+                i, key, writable, signer
+            );
+        }
+        for (ii, ix) in tx.message.instructions.iter().enumerate() {
+            println!(
+                "    ix[{}]: program_id_index={}  accounts={:?}  data={} bytes",
+                ii,
+                ix.program_id_index,
+                ix.accounts,
+                ix.data.len(),
+            );
+        }
     }
 }
 
